@@ -486,7 +486,7 @@ function snapshot(){
       props:p.props,augs:p.augs,jail:p.jail,out:p.out,recv:p.recv,grudge:p.grudge,
       loan:p.loan,domainUsed:p.domainUsed,otPenalty:p.otPenalty})),
     tiles:G.tiles.map(t=>({o:t.owner,h:t.houses,f:t.free})),
-    logs:G.logs.slice(0,45), pending:G.pending };
+    logs:G.logs.slice(0,45), pending:G.pending, sellerPending:sellerPending };
 }
 function applySnapshot(s){
   if(!G||G.players.length!==s.players.length){ newGame(s.players.map(p=>p.name)); buildBoard(); }
@@ -496,11 +496,15 @@ function applySnapshot(s){
   s.players.forEach((sp,i)=>Object.assign(G.players[i],sp));
   s.tiles.forEach((st,i)=>{G.tiles[i].owner=st.o;G.tiles[i].houses=st.h;G.tiles[i].free=st.f});
   G.logs=s.logs||[]; G.pending=s.pending;
+  sellerPending=s.sellerPending||null;
   const mine=G.players.findIndex(p=>p.claim===NET.uid);
   if(mine>=0)NET.seat=mine;
   if(!s.started){ renderLobby(s); redrawLog(); render(); return; }   // still in lobby
   if(!wasStarted){ closeModal(); }                                   // match just began -> leave the waiting room
-  redrawLog(); render(); renderPending();
+  redrawLog(); render();
+  // a seller prompt aimed at me takes priority over the ordinary pending view
+  if(sellerPending&&isMine(sellerPending.seat))renderSellerPrompt();
+  else renderPending();
   if(s.over)showResults();
 }
 /* host pushes state to every guest */
@@ -552,6 +556,9 @@ function hostRecv(conn,d){
   }
   if(d.t==="choice"){
     if(G.pending&&G.pending.seat===d.seat)applyChoice(d.choice);
+  }
+  if(d.t==="sellerChoice"){
+    if(sellerPending&&sellerPending.seat===d.seat&&sellerCb)sellerCb(d.choice);
   }
 }
 /* --- GUEST --- */
@@ -1087,18 +1094,47 @@ function buy(p,t,cost){
   talk(p,"buy"); render();
 }
 function auction(t){
-  busy=true; setBar("Auction…",[]);
-  let best=0,win=null;
-  G.players.forEach(p=>{
-    if(p.out||p.i===G.turn)return;
-    const v=botValue(p,t)*(0.7+Math.random()*0.5);
-    if(v>best&&p.cash>v){best=v;win=p}
-  });
-  setTimeout(()=>{
-    if(win){best=Math.round(Math.min(best,win.cash*0.7)/10)*10;buy(win,t,best);log(`Auction won by <b>${esc(win.name)}</b>.`)}
-    else log(`<b>${esc(t.name)}</b> draws no bids.`);
-    busy=false; endStep();
-  },700);
+  // Live ascending auction. Everyone still solvent may bid, including the player who declined.
+  // Bots decide a ceiling from botValue; humans get a bar prompt to raise or pass.
+  const bidders=G.players.filter(p=>!p.out);
+  let price=Math.max(10,Math.round(t.price*0.4/10)*10);
+  let high=null;                       // current high bidder
+  let idx=0, passes=0;
+  const order=bidders.slice();
+  log(`Auction for <b>${esc(t.name)}</b> opens at ${money(price)}.`);
+  render();
+  const step=()=>{
+    if(passes>=order.length){        // everyone passed since last raise
+      return close();
+    }
+    const p=order[idx%order.length];
+    idx++;
+    if(p===high||p.out||p.cash<price+10){ passes++; return next(); }
+    if(p.bot){
+      const ceiling=Math.round(botValue(p,t)*(0.7+Math.random()*0.5));
+      if(price+10<=ceiling&&price+10<=p.cash){
+        price+=10; high=p; passes=0; log(`<b>${esc(p.name)}</b> bids ${money(price)}.`); render();
+      }else passes++;
+      return next();
+    }
+    // human bidder
+    const bid=price+10;
+    ask(p.i,"bar",`Auction — <b>${esc(t.name)}</b>. Current bid ${money(price)}${high?` (${esc(high.name)})`:""}.`,
+      [{t:"Bid "+money(bid),cls:"big",dis:p.cash<bid},{t:"Pass",cls:"ghost"}],null,k=>{
+        if(k===0&&p.cash>=bid){ price=bid; high=p; passes=0; log(`<b>${esc(p.name)}</b> bids ${money(price)}.`); render(); }
+        else passes++;
+        next();
+      });
+  };
+  const next=()=>setTimeout(step, high&&high.bot?260:120);
+  const close=()=>{
+    if(high){ high.cash-=price; t.owner=high.i; high.props.push(t.i); pop(high);
+      log(`<b>${esc(high.name)}</b> wins <b>${esc(t.name)}</b> for ${money(price)}.`,"big");
+      if(price>=250)slam("Auction won",price,"→ "+high.name);
+    }else log(`<b>${esc(t.name)}</b> draws no bids.`);
+    render(); endStep();
+  };
+  step();
 }
 function endStep(){
   const p=P();
@@ -1196,17 +1232,63 @@ function resolveOffer(buyer,seller,t,price,back){
   const completes=set.filter(x=>x.owner===buyer.i).length===set.length-1;
   const need=botValue(seller,t)*(completes?1.9:1.5);
   const finish=ok=>{
-    if(ok)doTrade(buyer,seller,t,price);
-    else log(`<b>${esc(seller.name)}</b> waves off ${money(price)} for ${esc(t.name)}.`);
-    render(); back();
+    // only transfer if the deal is still valid (buyer can pay, seller still owns it)
+    if(ok&&buyer.cash>=price&&t.owner===seller.i){
+      doTrade(buyer,seller,t,price);
+    }else if(ok){
+      log(`The deal for <b>${esc(t.name)}</b> fell through.`);
+    }else{
+      log(`<b>${esc(seller.name)}</b> waves off ${money(price)} for ${esc(t.name)}.`);
+    }
+    render();
+    back();                       // hand control back to the buyer's turn
   };
   if(seller.bot){
-    setBar(`${esc(seller.name)} considers…`,[]);
-    return setTimeout(()=>finish(price>=need&&seller.props.length>1),800);
+    // resolve without blocking the buyer's screen
+    if(!buyer.bot)ask(buyer.i,"bar",`<span class="waiting">${esc(seller.name)} is considering your ${money(price)} offer…</span>`,[],null,()=>{});
+    return setTimeout(()=>{
+      G.pending=null; pendingCb=null;               // clear the buyer's waiting prompt
+      finish(price>=need&&seller.props.length>1);
+    },800);
   }
-  ask(seller.i,"bar",
-    `<b>${esc(buyer.name)}</b> offers you <b>${money(price)}</b> for ${esc(t.name)}${completes?" — it completes their district":""}.`,
-    [{t:"Take "+money(price),cls:"big"},{t:"Refuse",cls:"ghost"}],null,k=>finish(k===0));
+  // human seller across the network: buyer waits, but may cancel the offer
+  if(!buyer.bot){
+    ask(buyer.i,"bar",`<span class="waiting">Offer of ${money(price)} for ${esc(t.name)} sent to ${esc(seller.name)}…</span>`,
+      [{t:"Withdraw offer",cls:"ghost"}],{waitOffer:true},()=>{
+        // buyer withdrew: cancel the seller's prompt too
+        sellerPending=null; G.pending=null; pendingCb=null;
+        log(`<b>${esc(buyer.name)}</b> withdraws the offer.`);
+        render(); back();
+      });
+  }
+  // The seller's decision is tracked separately so it doesn't clobber the buyer's pending slot.
+  askSeller(seller,buyer,t,price,completes,finish);
+}
+/* A parallel prompt aimed at the seller. On the host it's a second pending slot;
+   the host publishes it and the seller (guest) answers it. */
+let sellerPending=null, sellerCb=null;
+function askSeller(seller,buyer,t,price,completes,finish){
+  sellerPending={seat:seller.i,kind:"bar",
+    text:`<b>${esc(buyer.name)}</b> offers <b>${money(price)}</b> for ${esc(t.name)}${completes?" — it completes their district":""}.`,
+    opts:[{t:"Take "+money(price),cls:"big"},{t:"Refuse",cls:"ghost"}]};
+  sellerCb=k=>{ sellerPending=null; sellerCb=null;
+    // clear the buyer's waiting prompt if it's still up
+    if(G.pending&&G.pending.data&&G.pending.data.waitOffer){G.pending=null;pendingCb=null;}
+    finish(k===0);
+  };
+  if(NET.mode==="host")publish();
+  renderSellerPrompt();
+}
+function renderSellerPrompt(){
+  if(!sellerPending)return;
+  if(isMine(sellerPending.seat)){
+    closeModal();
+    setBar(sellerPending.text, sellerPending.opts.map((o,k)=>({t:o.t,cls:o.cls,f:()=>chooseSeller(k)})));
+  }
+}
+function chooseSeller(k){
+  if(NET.mode==="guest"){ if(NET.hostConn&&NET.hostConn.open)NET.hostConn.send({t:"sellerChoice",seat:NET.seat,choice:k}); setBar('<span class="waiting">Sent…</span>',[]); return; }
+  const cb=sellerCb; if(cb){ cb(k); }
 }
 function doTrade(buyer,seller,t,price){
   buyer.cash-=price; seller.cash+=price;
