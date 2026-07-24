@@ -506,7 +506,7 @@ function applySnapshot(s){
 /* host pushes state to every guest */
 function publish(){ if(NET.mode!=="host")return;
   const snap=snapshot();
-  NET.conns.forEach(c=>{ try{ c.open&&c.send(snap) }catch(e){} });
+  NET.conns.forEach(c=>{ try{ if(c&&typeof c.send==="function"&&c.open!==false)c.send(snap) }catch(e){} });
 }
 /* --- HOST --- */
 function startHost(){
@@ -527,7 +527,9 @@ function startHost(){
   NET.startedGame=false; buildBoard(); render(); fit();
 }
 function onGuest(conn){
-  conn.on("open",()=>{ NET.conns.push(conn); });
+  const add=()=>{ if(!NET.conns.includes(conn))NET.conns.push(conn); };
+  conn.on("open",add);
+  add();                         // register now; some WebRTC impls fire "open" before we attach
   conn.on("data",d=>hostRecv(conn,d));
   conn.on("close",()=>{ NET.conns=NET.conns.filter(c=>c!==conn);
     const seat=G.players.findIndex(p=>p.claim===conn.uid);
