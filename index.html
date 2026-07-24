@@ -362,10 +362,7 @@ input[type=text]:focus{outline:none;border-color:var(--gold)}
   <div class="who" id="slamwho"></div><div class="amt" id="slamamt"></div><div class="to" id="slamto"></div>
 </div></div>
 
-
-
 <script>
-
 "use strict";
 const $=s=>document.querySelector(s), el=(t,c)=>{const e=document.createElement(t);if(c)e.className=c;return e};
 const money=n=>"$"+Math.round(n).toLocaleString("en-US");
@@ -483,7 +480,7 @@ function netStatus(){
 
 /* --- snapshot the whole board so a guest can draw it --- */
 function snapshot(){
-  return { t:"state", v:++NET.ver, over:G.over,
+  return { t:"state", v:++NET.ver, over:G.over, started:!!G.startedGame,
     round:G.round, phase:G.phase, turn:G.turn, dice:G.dice,
     players:G.players.map(p=>({i:p.i,name:p.name,bot:p.bot,human:p.human,claim:p.claim,cash:p.cash,pos:p.pos,
       props:p.props,augs:p.augs,jail:p.jail,out:p.out,recv:p.recv,grudge:p.grudge,
@@ -493,12 +490,16 @@ function snapshot(){
 }
 function applySnapshot(s){
   if(!G||G.players.length!==s.players.length){ newGame(s.players.map(p=>p.name)); buildBoard(); }
+  const wasStarted=G.startedGame;
   G.over=s.over; G.round=s.round; G.phase=s.phase; G.turn=s.turn; G.dice=s.dice;
+  G.startedGame=s.started;
   s.players.forEach((sp,i)=>Object.assign(G.players[i],sp));
   s.tiles.forEach((st,i)=>{G.tiles[i].owner=st.o;G.tiles[i].houses=st.h;G.tiles[i].free=st.f});
   G.logs=s.logs||[]; G.pending=s.pending;
   const mine=G.players.findIndex(p=>p.claim===NET.uid);
   if(mine>=0)NET.seat=mine;
+  if(!s.started){ renderLobby(s); redrawLog(); render(); return; }   // still in lobby
+  if(!wasStarted){ closeModal(); }                                   // match just began -> leave the waiting room
   redrawLog(); render(); renderPending();
   if(s.over)showResults();
 }
@@ -1419,28 +1420,60 @@ function hostSetup(){
   modal(`<div class="eyebrow">Opening a table…</div><h2>Connecting</h2>
     <p class="waiting">Reserving a room on the peer network…</p>`,true);
 }
+let LOBBY_FILL_BOTS=true;
 function renderLobbyHost(){
   if(G.startedGame)return;
+  const humans=G.players.filter(p=>p.human).length;
+  const canStart=LOBBY_FILL_BOTS?true:humans>=2;
   modal(`<div class="eyebrow">Your table is open</div><h2>Share this code</h2>
     <div class="code">${NET.code}</div>
-    <p>Anyone with this code can join from their own device. Empty seats are filled by bots when you start.</p>
-    <div class="seats">${G.players.map(p=>`
-      <div class="seat${p.human?"":" empty"}">
+    <p>Friends join from their own device with this code. ${humans} of 4 seats taken.</p>
+    <div class="seats">${G.players.map(p=>{
+      const filled=p.human;
+      const label=filled?p.name:(LOBBY_FILL_BOTS?"Open seat → bot":"Open seat → empty");
+      const tag=filled?(p.claim==="host"?"host":"ready"):(LOBBY_FILL_BOTS?"bot":"—");
+      return `<div class="seat${filled?"":" empty"}">
         <span class="sw" style="background:${p.color}"></span>
-        <b>${esc(p.human?p.name:"Open seat")}</b>
-        <span style="margin-left:auto;color:var(--bone-dim)">${p.human?(p.claim==="host"?"host":"ready"):"bot"}</span>
-      </div>`).join("")}</div>
+        <b>${esc(label)}</b>
+        <span style="margin-left:auto;color:var(--bone-dim)">${tag}</span>
+      </div>`}).join("")}</div>
+    <label style="display:flex;align-items:center;gap:9px;margin:14px 0;font-size:12px;letter-spacing:.06em;cursor:pointer">
+      <input type="checkbox" id="fillbots" ${LOBBY_FILL_BOTS?"checked":""} style="width:16px;height:16px;accent-color:var(--gold)">
+      Fill empty seats with bots
+    </label>
+    ${!LOBBY_FILL_BOTS&&humans<2?'<p style="color:#FF95AC">You need at least one friend seated to start without bots.</p>':""}
     <div class="rowbtn">
       <button class="btn ghost" id="cancel">Cancel</button>
-      <button class="btn big" id="go">Start the match</button>
+      <button class="btn big" id="go" ${canStart?"":"disabled"}>Start the match</button>
     </div>`,true);
+  $("#fillbots").onchange=e=>{ LOBBY_FILL_BOTS=e.target.checked; renderLobbyHost(); };
   $("#go").onclick=()=>{
+    const humanSeats=G.players.filter(p=>p.human);
+    if(!LOBBY_FILL_BOTS){
+      // drop empty seats: keep only real players, reindex the table
+      if(humanSeats.length<2)return;
+      keepOnly(humanSeats);
+    }else{
+      G.players.forEach(p=>{ if(!p.human)p.bot=true; });
+    }
     G.startedGame=true; closeModal();
-    G.players.forEach(p=>{ if(!p.human){p.bot=true;p.name=p.name} });
-    log("The table is set. Four players, eighteen rounds.");
-    render(); publish(); startTurn();
+    log(`The table is set. ${G.players.length} players, eighteen rounds.`);
+    buildBoard(); render(); publish(); startTurn();
   };
   $("#cancel").onclick=()=>{netTeardown();menu()};
+}
+/* rebuild the game with only the given players (drops unclaimed bot seats) */
+function keepOnly(keep){
+  const names=keep.map(p=>p.name);
+  const old=keep.map(p=>({...p}));
+  newGame(names);
+  keep.forEach((src,i)=>{
+    const d=G.players[i];
+    d.name=src.name; d.human=src.human; d.bot=false; d.claim=src.claim;
+    d.cash=1500+[0,60,140,250][i];
+    if(src.claim===NET.uid)NET.seat=i;
+  });
+  // remap each guest's seat: host tells them via the next snapshot (claim-based)
 }
 function joinSetup(){
   modal(`<div class="eyebrow">Join a table</div><h2>Enter the code</h2>
@@ -1490,6 +1523,4 @@ $("#btnhelp").onclick=rules;
 window.addEventListener("resize",()=>{ if(G){buildBoard();render()} fit() });
 newGame(["You",...BOTNAMES]); buildBoard(); render(); fit();
 menu();
-
-
 </script>
