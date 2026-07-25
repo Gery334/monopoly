@@ -789,17 +789,21 @@ function info(title,html){
 }
 function renderPlayers(){
   const w=$("#left"); w.innerHTML="";
+  const ranked=G.players.slice().filter(p=>!p.out).sort((a,b)=>netWorth(b)-netWorth(a));
+  const rankOf=p=>{const i=ranked.indexOf(p);return i<0?null:i+1};
+  const medal=["\u2460","\u2461","\u2462","\u2463"];
   G.players.forEach(p=>{
     const c=el("div","card"+(G.turn===p.i&&!G.over?" active":"")+(p.out?" dead":""));
     c.id="card"+p.i; c.style.setProperty("--pc",p.color);
     const sets=DISTRICTS.map((d,i)=>monopoly(p,i)?d.n:null).filter(Boolean);
-    c.innerHTML=`<div class="nm">${esc(p.name)}${p.i===NET.seat?" ●":""}${p.bot?" ·bot":""}</div>
+    const rk=rankOf(p);
+    c.innerHTML=`<div class="nm">${rk?`<span style="color:var(--gold)">${medal[rk-1]}</span> `:""}${esc(p.name)}${p.i===NET.seat?" \u25cf":""}${p.bot?" \u00b7bot":""}</div>
       ${p.recv?'<div class="tag">Receivership</div>':""}
-      ${p.jail>0?'<div class="tag" style="color:var(--cyan)">Holding · '+p.jail+'</div>':""}
+      ${p.jail>0?'<div class="tag" style="color:var(--cyan)">Holding \u00b7 '+p.jail+'</div>':""}
       <div class="cash mono">${money(p.cash)}</div>
-      <div class="sub">${p.props.length} lots · ${floorsOwned(p)} floors</div>
+      <div class="sub">${p.props.length} lots \u00b7 ${floorsOwned(p)} floors</div>
       <div class="sub" style="color:var(--brass)">Net ${money(netWorth(p))}</div>
-      ${sets.length?`<div class="sub" style="color:var(--gold)">◆ ${sets.join(" · ")}</div>`:""}
+      ${sets.length?`<div class="sub" style="color:var(--gold)">\u25c6 ${sets.join(" \u00b7 ")}</div>`:""}
       <div class="augs">${p.augs.map(id=>{const a=AUGBY[id];
         return `<span class="pip ${a.tier[0]}" title="${esc(a.n)}: ${esc(a.d)}">${esc(a.n)}</span>`}).join("")}</div>`;
     w.appendChild(c);
@@ -958,14 +962,10 @@ function startTurn(){
 function askTurn(p){
   const opts=[{t:"Roll",cls:"big"}], acts=["roll"];
   if(has(p,"SHARK")&&!p.loan){opts.push({t:"Take $500 loan",cls:"ghost"});acts.push("loan")}
-  if(has(p,"DOMAIN")&&!p.domainUsed){opts.push({t:"Eminent domain",cls:"ghost"});acts.push("domain")}
-  opts.push({t:"Trade",cls:"ghost"}); acts.push("trade");
-  ask(p.i,"bar",`Your move. Rent is running at <b>×${mult()}</b>.`,opts,null,k=>{
+  ask(p.i,"bar",`Your move. Rent is running at <b>\u00d7${mult()}</b>. Trading and building come after you roll.`,opts,null,k=>{
     const a=acts[k];
     if(a==="roll")return rollDice();
     if(a==="loan"){gain(p,500);p.loan=G.round+3;log(`<b>${esc(p.name)}</b> takes ${money(500)} from the shark. ${money(650)} due by round ${p.loan}.`,"bad");render();return askTurn(p)}
-    if(a==="domain")return askDomain(p,()=>askTurn(p));
-    if(a==="trade")return askTrade(p,()=>askTurn(p));
     askTurn(p);
   });
 }
@@ -1144,72 +1144,76 @@ function endStep(){
   }
   pendingRecv=null;
   if(p.bot)return setTimeout(()=>botBuild(p),500);
-  askPost(p);
+  turnHub(p);
 }
-function askPost(p){
+/* Single stable return point for the human's post-roll turn. Every sub-action
+   (build/trade/domain/auction) returns here by calling turnHub(p) — no threaded
+   callbacks, which is what was stranding the player with no buttons. */
+function turnHub(p){
+  busy=false;
   const opts=[],acts=[];
   const canBuild=G.round<13&&p.props.some(i=>monopoly(p,G.tiles[i].dist)&&G.tiles[i].houses<4);
   opts.push({t:"Build",cls:canBuild?"":"ghost",dis:!canBuild}); acts.push("build");
-  opts.push({t:"Trade",cls:"ghost"}); acts.push("trade");
-  if(has(p,"DOMAIN")&&!p.domainUsed){opts.push({t:"Eminent domain",cls:"ghost"});acts.push("domain")}
+  const canTrade=G.tiles.some(t=>t.type==="prop"&&t.owner!==null&&t.owner!==p.i);
+  opts.push({t:"Trade",cls:"ghost",dis:!canTrade}); acts.push("trade");
+  if(has(p,"DOMAIN")&&!p.domainUsed&&canTrade){opts.push({t:"Eminent domain",cls:"ghost"});acts.push("domain")}
   opts.push({t:"End turn",cls:"big"}); acts.push("end");
   ask(p.i,"bar",canBuild?"You hold a complete district. Build while you can."
-    :(G.round>=13?"Last call — construction is closed.":"Nothing forced. Trade, or pass."),opts,null,k=>{
+    :(G.round>=13?"Last call — construction is closed.":"Nothing forced. Trade, build, or pass."),opts,null,k=>{
       const a=acts[k];
-      if(a==="build")return askBuild(p,()=>askPost(p));
-      if(a==="trade")return askTrade(p,()=>askPost(p));
-      if(a==="domain")return askDomain(p,()=>askPost(p));
+      if(a==="build")return openBuild(p);
+      if(a==="trade")return openTradeList(p);
+      if(a==="domain")return openDomain(p);
       nextTurn();
     });
 }
-function askBuild(p,back){
+function openBuild(p){
   const list=p.props.map(i=>G.tiles[i]).filter(t=>monopoly(p,t.dist)&&t.houses<4);
   const rows=list.map(t=>{
     const c=(has(p,"BLUE")&&!t.free)?0:houseCost(p,t);
     return {i:t.i,sw:DISTRICTS[t.dist].c,n:t.name,
-      s:`${t.houses} floors → ${t.houses+1} · rent ${money(calcRent(t,p))} → ${money(Math.round(t.rent*HOUSE_MULT[t.houses+1]*mult()))}`,
+      s:`${t.houses} floors \u2192 ${t.houses+1} \u00b7 rent ${money(calcRent(t,p))} \u2192 ${money(Math.round(t.rent*HOUSE_MULT[t.houses+1]*mult()))}`,
       v:c===0?"FREE":money(c), dis:p.cash<c};
   });
   ask(p.i,"list","Build",null,{eyebrow:"Construction",
-    intro:"Only in districts you hold complete. Each floor multiplies rent: ×1 → ×4 → ×10 → ×22 → ×40.",
+    intro:"Only in districts you hold complete. Each floor multiplies rent: \u00d71 \u2192 \u00d74 \u2192 \u00d710 \u2192 \u00d722 \u2192 \u00d740.",
     rows,cancel:"Done"},k=>{
-      if(k<0)return back();
+      if(k<0)return turnHub(p);
       const t=G.tiles[rows[k].i];
       const c=(has(p,"BLUE")&&!t.free)?0:houseCost(p,t);
       if(has(p,"BLUE")&&!t.free)t.free=true;
       p.cash-=c; t.houses++; pop(p);
-      log(`<b>${esc(p.name)}</b> raises <b>${esc(t.name)}</b> to ${t.houses} floor${t.houses>1?"s":""}${c?" for "+money(c):" — free"}.`);
-      render(); askBuild(p,back);
+      log(`<b>${esc(p.name)}</b> raises <b>${esc(t.name)}</b> to ${t.houses} floor${t.houses>1?"s":""}${c?" for "+money(c):" \u2014 free"}.`);
+      render(); openBuild(p);
     });
 }
-function askDomain(p,back){
+function openDomain(p){
   const list=G.tiles.filter(t=>t.type==="prop"&&t.owner!==null&&t.owner!==p.i);
   const rows=list.map(t=>({i:t.i,sw:DISTRICTS[t.dist].c,n:t.name,
-    s:`${G.players[t.owner].name} · ${DISTRICTS[t.dist].n}`,v:money(t.price*2),dis:p.cash<t.price*2}));
-  ask(p.i,"list","Eminent Domain",null,{eyebrow:"Gold augment · once per game",
-    intro:"Force-buy any lot at 200% of its printed price. The holder has no say. Spend it on the lot that completes a district.",
+    s:`${G.players[t.owner].name} \u00b7 ${DISTRICTS[t.dist].n}`,v:money(t.price*2),dis:p.cash<t.price*2}));
+  ask(p.i,"list","Eminent Domain",null,{eyebrow:"Gold augment \u00b7 once per game",
+    intro:"Force-buy any lot at 200% of its printed price. The holder has no say.",
     rows,cancel:"Cancel"},k=>{
-      if(k<0)return back();
+      if(k<0)return turnHub(p);
       const t=G.tiles[rows[k].i], o=G.players[t.owner], c=t.price*2;
       p.cash-=c;o.cash+=c;o.props=o.props.filter(x=>x!==t.i);p.props.push(t.i);t.owner=p.i;t.houses=0;t.free=false;
       p.domainUsed=true;
       log(`<b>${esc(p.name)}</b> seizes <b>${esc(t.name)}</b> from ${esc(o.name)} for ${money(c)}.`,"big");
-      slam("Eminent Domain",c,t.name); render(); back();
+      slam("Eminent Domain",c,t.name); render(); turnHub(p);
     });
 }
-/* Trading: pick a lot, then pick one of three price tiers. The Appraiser labels each. */
-function askTrade(p,back){
+function openTradeList(p){
   const list=G.tiles.filter(t=>t.type==="prop"&&t.owner!==null&&t.owner!==p.i);
   const rows=list.map(t=>({i:t.i,sw:DISTRICTS[t.dist].c,n:t.name,
-    s:`${G.players[t.owner].name} · ${t.houses} floors · rent ${money(calcRent(t,p))}`,v:money(t.price)}));
+    s:`${G.players[t.owner].name} \u00b7 ${t.houses} floors \u00b7 rent ${money(calcRent(t,p))}`,v:money(t.price)}));
   ask(p.i,"list","Open the deal table",null,{eyebrow:"Cash for a lot",
-    intro:"Choose a lot, then choose how hard you want to push. The holder decides.",
+    intro:"Choose a lot, then choose how hard to push. The holder decides.",
     rows,cancel:"Close"},k=>{
-      if(k<0)return back();
-      askPrice(p,G.tiles[rows[k].i],back);
+      if(k<0)return turnHub(p);
+      openPrice(p,G.tiles[rows[k].i]);
     });
 }
-function askPrice(p,t,back){
+function openPrice(p,t){
   const o=G.players[t.owner];
   const val=botValue(o,t);
   const tiers=[
@@ -1222,17 +1226,19 @@ function askPrice(p,t,back){
   ask(p.i,"list",`Offer on ${t.name}`,null,{eyebrow:`Negotiating with ${o.name}`,
     intro:`Printed price ${money(t.price)}. It currently earns ${o.name} ${money(calcRent(t,p))} a landing.`,
     rows,cancel:"Back"},k=>{
-      if(k<0)return askTrade(p,back);
+      if(k<0)return openTradeList(p);
       const price=Math.round(val*tiers[k].mul/10)*10;
-      resolveOffer(p,o,t,price,back);
+      resolveOffer(p,o,t,price);
     });
 }
-function resolveOffer(buyer,seller,t,price,back){
+function resolveOffer(buyer,seller,t,price,botCont){
+  const back=()=>{ if(buyer.bot){ if(botCont)botCont(); } else turnHub(buyer); };
   const set=G.tiles.filter(x=>x.type==="prop"&&x.dist===t.dist);
   const completes=set.filter(x=>x.owner===buyer.i).length===set.length-1;
   const need=botValue(seller,t)*(completes?1.9:1.5);
+  let done=false;
   const finish=ok=>{
-    // only transfer if the deal is still valid (buyer can pay, seller still owns it)
+    if(done)return; done=true;                // guard against double-resolution
     if(ok&&buyer.cash>=price&&t.owner===seller.i){
       doTrade(buyer,seller,t,price);
     }else if(ok){
@@ -1241,27 +1247,26 @@ function resolveOffer(buyer,seller,t,price,back){
       log(`<b>${esc(seller.name)}</b> waves off ${money(price)} for ${esc(t.name)}.`);
     }
     render();
-    back();                       // hand control back to the buyer's turn
+    back();
   };
   if(seller.bot){
-    // resolve without blocking the buyer's screen
-    if(!buyer.bot)ask(buyer.i,"bar",`<span class="waiting">${esc(seller.name)} is considering your ${money(price)} offer…</span>`,[],null,()=>{});
+    if(!buyer.bot)ask(buyer.i,"bar",`<span class="waiting">${esc(seller.name)} is considering your ${money(price)} offer\u2026</span>`,[],null,()=>{});
     return setTimeout(()=>{
-      G.pending=null; pendingCb=null;               // clear the buyer's waiting prompt
+      G.pending=null; pendingCb=null;
       finish(price>=need&&seller.props.length>1);
     },800);
   }
-  // human seller across the network: buyer waits, but may cancel the offer
+  // human seller (possibly across the network): buyer waits with a Withdraw option
   if(!buyer.bot){
-    ask(buyer.i,"bar",`<span class="waiting">Offer of ${money(price)} for ${esc(t.name)} sent to ${esc(seller.name)}…</span>`,
+    ask(buyer.i,"bar",`<span class="waiting">Offer of ${money(price)} for ${esc(t.name)} sent to ${esc(seller.name)}\u2026</span>`,
       [{t:"Withdraw offer",cls:"ghost"}],{waitOffer:true},()=>{
-        // buyer withdrew: cancel the seller's prompt too
-        sellerPending=null; G.pending=null; pendingCb=null;
+        sellerPending=null; sellerCb=null;
+        if(done)return;
+        done=true;
         log(`<b>${esc(buyer.name)}</b> withdraws the offer.`);
         render(); back();
       });
   }
-  // The seller's decision is tracked separately so it doesn't clobber the buyer's pending slot.
   askSeller(seller,buyer,t,price,completes,finish);
 }
 /* A parallel prompt aimed at the seller. On the host it's a second pending slot;
