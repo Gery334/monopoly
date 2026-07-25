@@ -662,7 +662,7 @@ function netTeardown(){
 }
 
 /* ============ STATE ============ */
-let G=null, busy=false, pendingCb=null, modalSig=null;
+let G=null, busy=false, pendingCb=null, modalSig=null, modalKind="system";
 
 function newGame(names){
   G={
@@ -933,13 +933,14 @@ function setBar(text,btns){
   });
   const bar=$("#bar"); if(bar)bar.classList.toggle("mine",(btns||[]).length>0);
 }
-function modal(html,keep){
+function modal(html,keep,kind){
+  modalKind=kind||"system";
   $("#sheet").innerHTML=`<button class="xclose" id="mxclose" title="Close (Esc)">\u2715</button>`+html;
   $("#veil").classList.add("on");
   const x=$("#mxclose"); if(x)x.onclick=escapeUI;
   $("#veil").onclick=keep?null:e=>{if(e.target.id==="veil")escapeUI()};
 }
-function closeModal(){$("#veil").classList.remove("on");modalSig=null;}
+function closeModal(){$("#veil").classList.remove("on");modalSig=null;modalKind="system";}
 function slam(who,amt,to){
   $("#slamwho").textContent=who; $("#slamamt").textContent=amt===null?"CRASH":money(amt); $("#slamto").textContent=to;
   const s=$("#slam"); s.classList.remove("on"); void s.offsetWidth; s.classList.add("on");
@@ -984,7 +985,7 @@ function renderPending(){
         <button class="aug" data-k="${k}" style="--ac:${col};--abg:${bg}">
           <div class="tier">${tier}</div><div class="an">${esc(a.n)}</div>
           <div class="ad">${esc(a.d)}</div><div class="why">${esc(a.w)}</div>
-        </button>`}).join("")}</div>`,true);
+        </button>`}).join("")}</div>`,true,"decision");
     $("#sheet").querySelectorAll(".aug").forEach(b=>b.onclick=()=>choose(+b.dataset.k));
     return;
   }
@@ -1006,7 +1007,7 @@ function renderPending(){
       <div class="rowbtn">
         <button class="btn ghost" id="mcancel">${d.cancel||"Back"}</button>
         <button class="btn big" id="amtok">${d.confirm||"Send offer"}</button>
-      </div>`,true);
+      </div>`,true,"decision");
     const inp=$("#amtin"), note=$("#amtnote");
     const clamp=v=>Math.max(d.min,Math.min(d.max,Math.round(v||0)));
     const upd=()=>{
@@ -1039,7 +1040,7 @@ function renderPending(){
           ${r.sw?`<span class="sw" style="--dc:${r.sw}"></span>`:""}
           <span class="rn">${esc(r.n)}<small>${esc(r.s||"")}</small></span>
           <span class="rv">${r.v||""}</span></button>`).join("")||"<p>Nothing available.</p>"}</div>
-      <div class="rowbtn"><button class="btn ghost" data-k="-1" id="mcancel">${q.data.cancel||"Done"}</button></div>`,true);
+      <div class="rowbtn"><button class="btn ghost" data-k="-1" id="mcancel">${q.data.cancel||"Done"}</button></div>`,true,"decision");
     $("#sheet").querySelectorAll(".row").forEach(b=>b.onclick=()=>choose(+b.dataset.k));
     $("#mcancel").onclick=()=>choose(-1);
     return;
@@ -1058,13 +1059,14 @@ function choose(k){
    If a prompt is genuinely yours it is redrawn; otherwise the window just closes. */
 function escapeUI(){
   closeModal();
+  if(!G||!G.startedGame)return menu();          // no match running -> back to the main menu
   if(sellerPending&&isMine(sellerPending.seat))return renderSellerPrompt();
-  if(G&&G.pending&&isMine(G.pending.seat)){
+  if(G.pending&&isMine(G.pending.seat)){
     if(G.pending.kind==="bar")return renderPending();
-    // a list/draft window: cancelling is the safe, expected action
+    // a list/draft/amount window: cancelling is the safe, expected action
     return choose(-1);
   }
-  if(G&&!G.over)renderPending();
+  if(!G.over)renderPending();
 }
 function applyChoice(k){
   const cb=pendingCb; if(!cb)return;
@@ -1669,6 +1671,7 @@ function startLocal(){
   netTeardown(); closeModal();
   newGame(["You",...BOTNAMES]);
   G.players.forEach((p,i)=>{p.bot=i>0;p.human=i===0});
+  G.startedGame=true;
   NET.seat=0;
   buildBoard(); render(); log("The table is set. Four players, eighteen rounds.");
   fit(); startTurn();
@@ -1783,11 +1786,12 @@ document.addEventListener("keydown",e=>{ if(e.key==="Escape")escapeUI(); });
 /* Anti-freeze watchdog: if a window is open but the game state says it is not
    your decision, the window is stale — close it and redraw. Runs every 2s. */
 setInterval(()=>{
-  if(!G||G.over)return;
-  const open=$("#veil").classList.contains("on");
-  if(!open)return;
+  if(!G||G.over||!G.startedGame)return;          // never touch menus, lobbies or results
+  if(modalKind!=="decision")return;              // only a decision window can be stale
+  if(!$("#veil").classList.contains("on"))return;
   const mineSeller=sellerPending&&isMine(sellerPending.seat);
-  const minePending=G.pending&&isMine(G.pending.seat)&&(G.pending.kind==="list"||G.pending.kind==="draft"||G.pending.kind==="amount");
+  const minePending=G.pending&&isMine(G.pending.seat)&&
+    (G.pending.kind==="list"||G.pending.kind==="draft"||G.pending.kind==="amount");
   if(!mineSeller&&!minePending){ closeModal(); renderPending(); }
 },2000);
 window.addEventListener("resize",()=>{ if(G){buildBoard();render()} fit() });
