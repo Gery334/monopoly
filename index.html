@@ -382,7 +382,7 @@ input[type=text]:focus{outline:none;border-color:var(--gold)}
 
 <div id="app">
   <header>
-    <div class="wordmark">MOGUL<span>Playable Prototype</span></div>
+    <div class="wordmark">MOGUL<span>Prototype · build 9</span></div>
     <div class="phasebar" id="phasebar"></div>
     <div class="hdr-stat"><div class="k">Round</div><div class="v" id="hround">1 / 18</div></div>
     <div id="netbar"></div><button class="btn ghost" id="btnhelp">Rules</button>
@@ -935,10 +935,11 @@ function setBar(text,btns){
 }
 function modal(html,keep,kind){
   modalKind=kind||"system";
-  $("#sheet").innerHTML=`<button class="xclose" id="mxclose" title="Close (Esc)">\u2715</button>`+html;
+  const closer=(modalKind==="root")?"":`<button class="xclose" id="mxclose" title="Close (Esc)">\u2715</button>`;
+  $("#sheet").innerHTML=closer+html;
   $("#veil").classList.add("on");
   const x=$("#mxclose"); if(x)x.onclick=escapeUI;
-  $("#veil").onclick=keep?null:e=>{if(e.target.id==="veil")escapeUI()};
+  $("#veil").onclick=(keep||modalKind==="root")?null:e=>{if(e.target.id==="veil")escapeUI()};
 }
 function closeModal(){$("#veil").classList.remove("on");modalSig=null;modalKind="system";}
 function slam(who,amt,to){
@@ -1057,6 +1058,7 @@ function choose(k){
 }
 /* Universal escape hatch: ESC or the ✕ always returns you to a usable screen.
    If a prompt is genuinely yours it is redrawn; otherwise the window just closes. */
+function netBusy(){ return NET.mode==="host"||NET.mode==="guest"; }
 function escapeUI(){
   closeModal();
   if(!G||!G.startedGame)return menu();          // no match running -> back to the main menu
@@ -1639,14 +1641,14 @@ function showResults(){
 /* ============ ONLINE ============ */
 /* ============ MENUS ============ */
 function menu(){
-  modal(`<div class="eyebrow">Playable prototype</div><h2>MOGUL</h2>
+  modal(`<div class="eyebrow">Playable prototype · build 9</div><h2>MOGUL</h2>
     <p>A 24-lot board, 18 rounds, hard-capped. Three augment drafts — <b>Silver</b> after round 2, <b>Gold</b> after round 5, <b>Prismatic</b> after round 9. Rent scales ×1 → ×1.5 → ×2 → ×3 as the sky turns.</p>
     <div class="rows">
       <button class="row" id="mlocal"><span class="rn">Play solo<small>You against three drafting bots</small></span><span class="rv">→</span></button>
       <button class="row" id="mhost"><span class="rn">Host a table<small>Get a code, share it with friends</small></span><span class="rv">→</span></button>
       <button class="row" id="mjoin"><span class="rn">Join a table<small>Enter a friend's code</small></span><span class="rv">→</span></button>
     </div>
-    <div class="rowbtn"><button class="btn ghost" id="mrules">Rules</button></div>`,true);
+    <div class="rowbtn"><button class="btn ghost" id="mrules">Rules</button></div>`,true,"root");
   $("#mlocal").onclick=startLocal;
   $("#mhost").onclick=()=>peerReady()?hostSetup():noNet();
   $("#mjoin").onclick=()=>peerReady()?joinSetup():noNet();
@@ -1782,10 +1784,12 @@ function fit(){
   $("#persp").style.transform=`scale(${Math.max(0.42,s)})`;
 }
 $("#btnhelp").onclick=rules;
-document.addEventListener("keydown",e=>{ if(e.key==="Escape")escapeUI(); });
+document.addEventListener("keydown",e=>{ if(e.key==="Escape"&&modalKind!=="root")escapeUI(); });
 /* Anti-freeze watchdog: if a window is open but the game state says it is not
    your decision, the window is stale — close it and redraw. Runs every 2s. */
 setInterval(()=>{
+  // Guardian: with no match running and nothing on screen, restore the main menu.
+  if((!G||!G.startedGame)&&!$("#veil").classList.contains("on")&&!netBusy()){ menu(); return; }
   if(!G||G.over||!G.startedGame)return;          // never touch menus, lobbies or results
   if(modalKind!=="decision")return;              // only a decision window can be stale
   if(!$("#veil").classList.contains("on"))return;
