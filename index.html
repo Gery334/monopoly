@@ -317,6 +317,50 @@ input[type=text]{width:100%;background:#0E0A16;border:1px solid var(--brass-dim)
   padding:12px;text-transform:uppercase;margin:10px 0}
 input[type=text]:focus{outline:none;border-color:var(--gold)}
 .waiting{color:var(--bone-dim);font-style:italic}
+
+/* ---------- UI polish ---------- */
+.sheet{position:relative}
+.xclose{
+  position:absolute;top:12px;right:12px;width:32px;height:32px;
+  border:1px solid var(--brass-dim);color:var(--bone-dim);background:#0E0A16;
+  font-size:15px;line-height:1;border-radius:2px;transition:.16s;z-index:5;
+}
+.xclose:hover{border-color:var(--gold);color:var(--gold);background:#1C1526;transform:rotate(90deg)}
+.sheet h2{padding-right:44px}
+
+/* richer rows */
+.row{position:relative;overflow:hidden}
+.row::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(240,217,140,.07));opacity:0;transition:.18s;pointer-events:none}
+.row:hover:not(:disabled)::after{opacity:1}
+.row:hover:not(:disabled){transform:translateX(3px)}
+.row .rn{font-size:12.5px;letter-spacing:.05em}
+.row .rn small{margin-top:2px;opacity:.8}
+.row .rv{font-size:13px;font-weight:700}
+.rows{gap:6px}
+
+/* action bar emphasis on your turn */
+#bar{transition:box-shadow .5s,border-color .5s}
+#bar.mine{border-top-color:var(--gold);box-shadow:0 -14px 40px -22px var(--gold),inset 0 1px 0 rgba(240,217,140,.25)}
+#prompt{transition:color .3s}
+.waiting{color:var(--bone-dim);font-style:italic;letter-spacing:.04em}
+
+/* player card polish */
+.card{transition:.35s,transform .18s}
+.card:hover{border-color:var(--brass-dim)}
+.card .nm{display:flex;align-items:center;gap:5px}
+
+/* price tier cards read as choices, not a list */
+.tier-hint{font-size:10.5px;color:var(--bone-dim);margin-top:-4px;margin-bottom:10px;letter-spacing:.05em}
+
+/* modal entrance */
+#veil.on .sheet{animation:sheetIn .22s cubic-bezier(.2,.9,.3,1)}
+@keyframes sheetIn{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+
+/* scrollbars */
+*::-webkit-scrollbar{width:8px;height:8px}
+*::-webkit-scrollbar-track{background:#0E0A16}
+*::-webkit-scrollbar-thumb{background:#3A3148;border-radius:4px}
+*::-webkit-scrollbar-thumb:hover{background:var(--brass-dim)}
 </style>
 
 <div id="app">
@@ -854,10 +898,13 @@ function setBar(text,btns){
     x.textContent=b.t; x.disabled=!!b.dis; x.onclick=b.f;
     a.appendChild(x);
   });
+  const bar=$("#bar"); if(bar)bar.classList.toggle("mine",(btns||[]).length>0);
 }
 function modal(html,keep){
-  $("#sheet").innerHTML=html; $("#veil").classList.add("on");
-  $("#veil").onclick=keep?null:e=>{if(e.target.id==="veil")closeModal()};
+  $("#sheet").innerHTML=`<button class="xclose" id="mxclose" title="Close (Esc)">\u2715</button>`+html;
+  $("#veil").classList.add("on");
+  const x=$("#mxclose"); if(x)x.onclick=escapeUI;
+  $("#veil").onclick=keep?null:e=>{if(e.target.id==="veil")escapeUI()};
 }
 function closeModal(){$("#veil").classList.remove("on");modalSig=null;}
 function slam(who,amt,to){
@@ -926,8 +973,25 @@ function renderPending(){
   }
 }
 function choose(k){
-  if(NET.mode==="guest"){ sendAction(k); setBar('<span class="waiting">Sent…</span>',[]); return; }
+  if(NET.mode==="guest"){
+    closeModal();                    // never leave the guest staring at a dead window
+    sendAction(k);
+    setBar('<span class="waiting">Sent\u2026</span>',[]);
+    return;
+  }
   applyChoice(k);
+}
+/* Universal escape hatch: ESC or the ✕ always returns you to a usable screen.
+   If a prompt is genuinely yours it is redrawn; otherwise the window just closes. */
+function escapeUI(){
+  closeModal();
+  if(sellerPending&&isMine(sellerPending.seat))return renderSellerPrompt();
+  if(G&&G.pending&&isMine(G.pending.seat)){
+    if(G.pending.kind==="bar")return renderPending();
+    // a list/draft window: cancelling is the safe, expected action
+    return choose(-1);
+  }
+  if(G&&!G.over)renderPending();
 }
 function applyChoice(k){
   const cb=pendingCb; if(!cb)return;
@@ -1211,10 +1275,22 @@ function openDomain(p){
 }
 function openTradeList(p){
   const list=G.tiles.filter(t=>t.type==="prop"&&t.owner!==null&&t.owner!==p.i);
-  const rows=list.map(t=>({i:t.i,sw:DISTRICTS[t.dist].c,n:t.name,
-    s:`${G.players[t.owner].name} \u00b7 ${t.houses} floors \u00b7 rent ${money(calcRent(t,p))}`,v:money(t.price)}));
+  if(!list.length){
+    return ask(p.i,"bar","Nobody else holds a lot yet \u2014 there is nothing to trade for.",
+      [{t:"Back",cls:"big"}],null,()=>turnHub(p));
+  }
+  // sort: lots that complete one of my districts first, then by district
+  const completes=t=>{
+    const set=G.tiles.filter(x=>x.type==="prop"&&x.dist===t.dist);
+    return set.filter(x=>x.owner===p.i).length===set.length-1;
+  };
+  list.sort((a,b)=>(completes(b)?1:0)-(completes(a)?1:0)||a.dist-b.dist);
+  const rows=list.map(t=>({i:t.i,sw:DISTRICTS[t.dist].c,
+    n:t.name+(completes(t)?"  \u25c6 completes your district":""),
+    s:`${G.players[t.owner].name} \u00b7 ${DISTRICTS[t.dist].n} \u00b7 ${t.houses} floors \u00b7 costs you ${money(calcRent(t,p))} a landing`,
+    v:money(t.price)}));
   ask(p.i,"list","Open the deal table",null,{eyebrow:"Cash for a lot",
-    intro:"Choose a lot, then choose how hard to push. The holder decides.",
+    intro:"Pick a lot, then choose how hard to push. The holder decides \u2014 and can refuse.",
     rows,cancel:"Close"},k=>{
       if(k<0)return turnHub(p);
       openPrice(p,G.tiles[rows[k].i]);
@@ -1223,15 +1299,21 @@ function openTradeList(p){
 function openPrice(p,t){
   const o=G.players[t.owner];
   const val=botValue(o,t);
+  const set=G.tiles.filter(x=>x.type==="prop"&&x.dist===t.dist);
+  const completes=set.filter(x=>x.owner===p.i).length===set.length-1;
   const tiers=[
-    {mul:1.1,lab:"Lowball",note:"They will probably refuse."},
-    {mul:1.7,lab:"Fair",note:"A real offer."},
-    {mul:2.4,lab:"Overpay",note:"Hard to say no to."},
+    {mul:1.1,lab:"Lowball",note:"Cheap. They will probably refuse."},
+    {mul:1.7,lab:"Fair offer",note:"Roughly what it is worth to them."},
+    {mul:2.4,lab:"Overpay",note:"Hard to refuse \u2014 and it shows."},
   ];
-  const rows=tiers.map(x=>({n:x.lab,s:x.note,v:money(Math.round(val*x.mul/10)*10),
-    dis:p.cash<Math.round(val*x.mul/10)*10}));
+  const rows=tiers.map(x=>{
+    const amt=Math.round(val*x.mul/10)*10;
+    return {n:x.lab,s:x.note,v:money(amt),dis:p.cash<amt};
+  });
   ask(p.i,"list",`Offer on ${t.name}`,null,{eyebrow:`Negotiating with ${o.name}`,
-    intro:`Printed price ${money(t.price)}. It currently earns ${o.name} ${money(calcRent(t,p))} a landing.`,
+    intro:`${DISTRICTS[t.dist].n} \u00b7 printed price ${money(t.price)} \u00b7 you currently pay ${money(calcRent(t,p))} when you land here.`
+      +(completes?" <b>This lot completes your district \u2014 they know it, and will hold out for more.</b>":"")
+      +` You have ${money(p.cash)}.`,
     rows,cancel:"Back"},k=>{
       if(k<0)return openTradeList(p);
       const price=Math.round(val*tiers[k].mul/10)*10;
@@ -1624,6 +1706,17 @@ function fit(){
   $("#persp").style.transform=`scale(${Math.max(0.42,s)})`;
 }
 $("#btnhelp").onclick=rules;
+document.addEventListener("keydown",e=>{ if(e.key==="Escape")escapeUI(); });
+/* Anti-freeze watchdog: if a window is open but the game state says it is not
+   your decision, the window is stale — close it and redraw. Runs every 2s. */
+setInterval(()=>{
+  if(!G||G.over)return;
+  const open=$("#veil").classList.contains("on");
+  if(!open)return;
+  const mineSeller=sellerPending&&isMine(sellerPending.seat);
+  const minePending=G.pending&&isMine(G.pending.seat)&&(G.pending.kind==="list"||G.pending.kind==="draft");
+  if(!mineSeller&&!minePending){ closeModal(); renderPending(); }
+},2000);
 window.addEventListener("resize",()=>{ if(G){buildBoard();render()} fit() });
 newGame(["You",...BOTNAMES]); buildBoard(); render(); fit();
 menu();
