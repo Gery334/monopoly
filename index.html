@@ -601,7 +601,7 @@ function netTeardown(){
 }
 
 /* ============ STATE ============ */
-let G=null, busy=false, pendingCb=null;
+let G=null, busy=false, pendingCb=null, modalSig=null;
 
 function newGame(names){
   G={
@@ -859,7 +859,7 @@ function modal(html,keep){
   $("#sheet").innerHTML=html; $("#veil").classList.add("on");
   $("#veil").onclick=keep?null:e=>{if(e.target.id==="veil")closeModal()};
 }
-function closeModal(){$("#veil").classList.remove("on")}
+function closeModal(){$("#veil").classList.remove("on");modalSig=null;}
 function slam(who,amt,to){
   $("#slamwho").textContent=who; $("#slamamt").textContent=amt===null?"CRASH":money(amt); $("#slamto").textContent=to;
   const s=$("#slam"); s.classList.remove("on"); void s.offsetWidth; s.classList.add("on");
@@ -877,12 +877,13 @@ function ask(seat,kind,text,opts,data,cb){
 }
 function renderPending(){
   const q=G.pending;
-  if($("#veil").classList.contains("on")&&(!q||q.kind==="bar"))return;
-  if(!q){ setBar(busy?"…":"",[]); closeModal(); return; }
+  // A live seller prompt for me overrides everything else.
+  if(sellerPending&&isMine(sellerPending.seat)){ return renderSellerPrompt(); }
+  if(!q){ closeModal(); setBar(busy?"\u2026":"",[]); return; }
   const mine=isMine(q.seat);
   if(!mine){
     closeModal();
-    setBar(`<span class="waiting">Waiting on <b>${esc(G.players[q.seat].name)}</b>…</span>`,[]);
+    setBar(`<span class="waiting">Waiting on <b>${esc(G.players[q.seat].name)}</b>\u2026</span>`,[]);
     return;
   }
   if(q.kind==="bar"){
@@ -891,6 +892,9 @@ function renderPending(){
     return;
   }
   if(q.kind==="draft"){
+    const sig="draft:"+q.data.offers.join(",");
+    if(modalSig===sig&&$("#veil").classList.contains("on"))return;
+    modalSig=sig;
     const tier=q.data.tier;
     const col={silver:"#8C97A8",gold:"var(--brass)",prismatic:"#A45CD6"}[tier];
     const bg={silver:"#191E26",gold:"#221A0F",prismatic:"#1E1030"}[tier];
@@ -905,6 +909,9 @@ function renderPending(){
     return;
   }
   if(q.kind==="list"){
+    const sig="list:"+q.text+":"+(q.data.rows||[]).length;
+    if(modalSig===sig&&$("#veil").classList.contains("on"))return;
+    modalSig=sig;
     modal(`<div class="eyebrow">${q.data.eyebrow||""}</div><h2>${q.text}</h2>
       <p>${q.data.intro||""}</p>
       <div class="rows">${q.data.rows.map((r,k)=>`
@@ -1292,8 +1299,16 @@ function renderSellerPrompt(){
   }
 }
 function chooseSeller(k){
-  if(NET.mode==="guest"){ if(NET.hostConn&&NET.hostConn.open)NET.hostConn.send({t:"sellerChoice",seat:NET.seat,choice:k}); setBar('<span class="waiting">Sent…</span>',[]); return; }
-  const cb=sellerCb; if(cb){ cb(k); }
+  if(NET.mode==="guest"){
+    // send to host, then immediately clear my own prompt so I never freeze on this screen
+    if(NET.hostConn&&NET.hostConn.open)NET.hostConn.send({t:"sellerChoice",seat:NET.seat,choice:k});
+    sellerPending=null; sellerCb=null;
+    setBar('<span class="waiting">Sent\u2026 waiting for the table.</span>',[]);
+    return;
+  }
+  const cb=sellerCb; sellerPending=null; sellerCb=null;
+  if(cb)cb(k);
+  if(NET.mode==="host")publish();   // push the resolved state to everyone
 }
 function doTrade(buyer,seller,t,price){
   buyer.cash-=price; seller.cash+=price;
