@@ -361,6 +361,23 @@ input[type=text]:focus{outline:none;border-color:var(--gold)}
 *::-webkit-scrollbar-track{background:#0E0A16}
 *::-webkit-scrollbar-thumb{background:#3A3148;border-radius:4px}
 *::-webkit-scrollbar-thumb:hover{background:var(--brass-dim)}
+
+/* amount entry */
+.amtbox{display:flex;align-items:center;gap:8px;margin:14px 0 8px;flex-wrap:wrap;justify-content:center}
+.amtbox input[type=number]{
+  flex:1;min-width:150px;background:#0E0A16;border:1px solid var(--brass);color:var(--gold);
+  font-family:'JetBrains Mono',monospace;font-size:30px;letter-spacing:.06em;text-align:center;
+  padding:10px;border-radius:2px;-moz-appearance:textfield;
+}
+.amtbox input[type=number]::-webkit-outer-spin-button,
+.amtbox input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.amtbox input[type=number]:focus{outline:none;border-color:var(--gold);box-shadow:0 0 22px -6px var(--gold)}
+.amtstep{padding:9px 12px;font-size:11px;letter-spacing:.1em}
+.amtnote{text-align:center;margin:6px 0 2px;min-height:26px}
+
+/* house counter on tiles */
+.hcount{display:block;font-family:'JetBrains Mono',monospace;font-size:7px;
+  letter-spacing:.14em;color:var(--gold);line-height:1.1}
 </style>
 
 <div id="app">
@@ -761,32 +778,48 @@ function renderTiles(){
         const g=el("div","ownglow"); g.style.setProperty("--oc",G.players[t.owner].color); d.appendChild(g);
       }
       const l=el("div","lbl");
-      l.innerHTML=esc(t.name)+`<span class="price">${t.owner===null?money(t.price):money(calcRent(t,null))}</span>`;
+      l.innerHTML=esc(t.name)
+        +(t.houses>0?`<span class="hcount">${"\u25aa".repeat(Math.min(t.houses,3))}${t.houses>=4?" \u2605":""} ${t.houses}</span>`:"")
+        +`<span class="price">${t.owner===null?money(t.price):money(calcRent(t,null))}</span>`;
       d.appendChild(l);
-      const n=t.owner===null?3:FLOORS[t.houses];
       const b=el("div","bldg"+(t.owner===null?" holo":""));
       const base=cell*0.46;
-      for(let k=0;k<n;k++){
+      const addSlice=(w,z,bright)=>{
         const s=el("div","slice");
-        const w=base*(1-(k/n)*0.45);
         s.style.width=w+"px"; s.style.height=w+"px";
         s.style.marginLeft=(-w/2)+"px"; s.style.marginTop=(-w/2)+"px";
-        s.style.transform=`translateZ(${k*3.2}px)`;
+        s.style.transform=`translateZ(${z}px)`;
         if(t.owner!==null){
           s.style.setProperty("--sc",DISTRICTS[t.dist].c);
-          s.style.filter="brightness("+(0.40+0.72*(k/Math.max(n-1,1))).toFixed(2)+")";
+          s.style.filter="brightness("+bright.toFixed(2)+")";
         }
         b.appendChild(s);
-      }
-      if(t.houses>=4){
-        const cr=el("div","crown");
-        cr.style.width="5px";cr.style.height="5px";cr.style.marginLeft="-2.5px";cr.style.marginTop="-2.5px";
-        cr.style.transform=`translateZ(${n*3.2+10}px)`;
-        b.appendChild(cr);
+      };
+      if(t.owner===null){
+        // unclaimed: low cyan wireframe footprint
+        for(let k=0;k<3;k++)addSlice(base*(1-k*0.12),k*3,1);
+      }else{
+        // a flat plinth for the lot itself...
+        addSlice(base,0,0.5); addSlice(base*0.96,3,0.58);
+        // ...then ONE clearly separated block per house, so you can count them
+        let z=9;
+        for(let h=0;h<t.houses;h++){
+          const w=base*(0.82-h*0.09);
+          addSlice(w,z,0.62+h*0.09);
+          addSlice(w*0.97,z+3,0.70+h*0.09);
+          addSlice(w*0.90,z+6,0.86+h*0.09);   // bright cap marks the top of each house
+          z+=12;                               // visible gap between houses
+        }
+        if(t.houses>=4){
+          const cr=el("div","crown");
+          cr.style.width="6px";cr.style.height="6px";cr.style.marginLeft="-3px";cr.style.marginTop="-3px";
+          cr.style.transform=`translateZ(${z+6}px)`;
+          b.appendChild(cr);
+        }
       }
       d.appendChild(b);
     }else{
-      const sub={go:"Collect $200",jail:"Just visiting",vault:"+$150",raid:"To holding",fort:"Draw",tax:money(t.amt)}[t.type]||"";
+      const sub={go:"Collect $200",jail:"Just visiting",vault:"+$150",raid:"Go to holding",fort:"Draw",tax:money(t.amt)}[t.type]||"";
       const l=el("div","lbl"); l.innerHTML=esc(t.name)+`<span class="price">${sub}</span>`;
       d.appendChild(l);
     }
@@ -955,6 +988,46 @@ function renderPending(){
     $("#sheet").querySelectorAll(".aug").forEach(b=>b.onclick=()=>choose(+b.dataset.k));
     return;
   }
+  if(q.kind==="amount"){
+    const sig="amount:"+q.text+":"+q.data.def;
+    if(modalSig===sig&&$("#veil").classList.contains("on"))return;
+    modalSig=sig;
+    const d=q.data;
+    modal(`<div class="eyebrow">${d.eyebrow||""}</div><h2>${q.text}</h2>
+      <p>${d.intro||""}</p>
+      <div class="amtbox">
+        <button class="btn ghost amtstep" data-v="-100">−100</button>
+        <button class="btn ghost amtstep" data-v="-10">−10</button>
+        <input type="number" id="amtin" value="${d.def}" min="${d.min}" max="${d.max}" step="1">
+        <button class="btn ghost amtstep" data-v="10">+10</button>
+        <button class="btn ghost amtstep" data-v="100">+100</button>
+      </div>
+      <div class="amtnote" id="amtnote"></div>
+      <div class="rowbtn">
+        <button class="btn ghost" id="mcancel">${d.cancel||"Back"}</button>
+        <button class="btn big" id="amtok">${d.confirm||"Send offer"}</button>
+      </div>`,true);
+    const inp=$("#amtin"), note=$("#amtnote");
+    const clamp=v=>Math.max(d.min,Math.min(d.max,Math.round(v||0)));
+    const upd=()=>{
+      const v=clamp(+inp.value);
+      inp.value=v;
+      if(d.gauge){
+        const r=v/d.gauge;
+        const c=r<0.9?["pred","Below what they think it is worth"]
+              :r<1.5?["lop","A serious offer"]
+              :["fair","Well over the odds \u2014 hard to refuse"];
+        note.innerHTML=`<span class="appr ${c[0]}">Appraiser: ${c[1]}</span>`;
+      }
+    };
+    inp.oninput=upd; upd();
+    $("#sheet").querySelectorAll(".amtstep").forEach(b=>b.onclick=()=>{
+      inp.value=clamp((+inp.value)+(+b.dataset.v)); upd();
+    });
+    $("#amtok").onclick=()=>choose(clamp(+inp.value));
+    $("#mcancel").onclick=()=>choose(-1);
+    return;
+  }
   if(q.kind==="list"){
     const sig="list:"+q.text+":"+(q.data.rows||[]).length;
     if(modalSig===sig&&$("#veil").classList.contains("on"))return;
@@ -1110,9 +1183,9 @@ function land(p){
   const t=G.tiles[p.pos]; render();
   switch(t.type){
     case "go": log(`<b>${esc(p.name)}</b> lands squarely on GO.`); return endStep();
-    case "jail": log(`<b>${esc(p.name)}</b> is just visiting.`); return endStep();
+    case "jail": log(`<b>${esc(p.name)}</b> is just visiting Holding.`); return endStep();
     case "vault": gain(p,150); log(`<b>${esc(p.name)}</b> draws ${money(150)} from The Vault.`); return endStep();
-    case "raid": return jail(p);
+    case "raid": log(`<b>${esc(p.name)}</b> lands on <b>Raid</b> and is taken to Holding.`,"bad"); return jail(p);
     case "tax": spend(p,t.amt); log(`<b>${esc(p.name)}</b> pays a levy of ${money(t.amt)}.`,"bad"); return endStep();
     case "fort": {
       const c=pick(FORTUNE);
@@ -1180,20 +1253,26 @@ function auction(t){
     }
     const p=order[idx%order.length];
     idx++;
-    if(p===high||p.out||p.cash<price+10){ passes++; return next(); }
+    if(p===high||p.out||p.cash<price+2){ passes++; return next(); }
     if(p.bot){
       const ceiling=Math.round(botValue(p,t)*(0.7+Math.random()*0.5));
-      if(price+10<=ceiling&&price+10<=p.cash){
-        price+=10; high=p; passes=0; log(`<b>${esc(p.name)}</b> bids ${money(price)}.`); render();
+      const up=(ceiling-price)>150?50:10;
+      if(price+up<=ceiling&&price+up<=p.cash){
+        price+=up; high=p; passes=0; log(`<b>${esc(p.name)}</b> bids ${money(price)}.`); render();
       }else passes++;
       return next();
     }
-    // human bidder
-    const bid=price+10;
-    ask(p.i,"bar",`Auction — <b>${esc(t.name)}</b>. Current bid ${money(price)}${high?` (${esc(high.name)})`:""}.`,
-      [{t:"Bid "+money(bid),cls:"big",dis:p.cash<bid},{t:"Pass",cls:"ghost"}],null,k=>{
-        if(k===0&&p.cash>=bid){ price=bid; high=p; passes=0; log(`<b>${esc(p.name)}</b> bids ${money(price)}.`); render(); }
-        else passes++;
+    // human bidder: choose your own increment
+    const steps=[2,10,100];
+    ask(p.i,"bar",
+      `Auction — <b>${esc(t.name)}</b>. Current bid <b>${money(price)}</b>${high?` by ${esc(high.name)}`:""}. You hold ${money(p.cash)}.`,
+      steps.map(v=>({t:"+"+money(v),cls:v===10?"big":"",dis:p.cash<price+v}))
+           .concat([{t:"Pass",cls:"ghost"}]),null,k=>{
+        const v=steps[k];
+        if(v!==undefined&&p.cash>=price+v){
+          price+=v; high=p; passes=0;
+          log(`<b>${esc(p.name)}</b> bids ${money(price)}.`); render();
+        }else passes++;
         next();
       });
   };
@@ -1301,24 +1380,18 @@ function openPrice(p,t){
   const val=botValue(o,t);
   const set=G.tiles.filter(x=>x.type==="prop"&&x.dist===t.dist);
   const completes=set.filter(x=>x.owner===p.i).length===set.length-1;
-  const tiers=[
-    {mul:1.1,lab:"Lowball",note:"Cheap. They will probably refuse."},
-    {mul:1.7,lab:"Fair offer",note:"Roughly what it is worth to them."},
-    {mul:2.4,lab:"Overpay",note:"Hard to refuse \u2014 and it shows."},
-  ];
-  const rows=tiers.map(x=>{
-    const amt=Math.round(val*x.mul/10)*10;
-    return {n:x.lab,s:x.note,v:money(amt),dis:p.cash<amt};
+  const suggested=Math.min(p.cash,Math.round(val*1.7/10)*10);
+  ask(p.i,"amount",`Offer on ${t.name}`,null,{
+    eyebrow:`Negotiating with ${o.name}`,
+    intro:`${DISTRICTS[t.dist].n} \u00b7 printed price ${money(t.price)} \u00b7 you pay ${money(calcRent(t,p))} when you land here.`
+      +(completes?" <b>This lot completes your district \u2014 they know it, and will hold out.</b>":"")
+      +` Type any amount up to your ${money(p.cash)}.`,
+    def:suggested, min:0, max:p.cash, gauge:val,
+    cancel:"Back", confirm:"Send offer"
+  },k=>{
+    if(k<0)return openTradeList(p);
+    resolveOffer(p,o,t,Math.max(0,Math.min(p.cash,k)));
   });
-  ask(p.i,"list",`Offer on ${t.name}`,null,{eyebrow:`Negotiating with ${o.name}`,
-    intro:`${DISTRICTS[t.dist].n} \u00b7 printed price ${money(t.price)} \u00b7 you currently pay ${money(calcRent(t,p))} when you land here.`
-      +(completes?" <b>This lot completes your district \u2014 they know it, and will hold out for more.</b>":"")
-      +` You have ${money(p.cash)}.`,
-    rows,cancel:"Back"},k=>{
-      if(k<0)return openTradeList(p);
-      const price=Math.round(val*tiers[k].mul/10)*10;
-      resolveOffer(p,o,t,price);
-    });
 }
 function resolveOffer(buyer,seller,t,price,botCont){
   const back=()=>{ if(buyer.bot){ if(botCont)botCont(); } else turnHub(buyer); };
@@ -1714,7 +1787,7 @@ setInterval(()=>{
   const open=$("#veil").classList.contains("on");
   if(!open)return;
   const mineSeller=sellerPending&&isMine(sellerPending.seat);
-  const minePending=G.pending&&isMine(G.pending.seat)&&(G.pending.kind==="list"||G.pending.kind==="draft");
+  const minePending=G.pending&&isMine(G.pending.seat)&&(G.pending.kind==="list"||G.pending.kind==="draft"||G.pending.kind==="amount");
   if(!mineSeller&&!minePending){ closeModal(); renderPending(); }
 },2000);
 window.addEventListener("resize",()=>{ if(G){buildBoard();render()} fit() });
