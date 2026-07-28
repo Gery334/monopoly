@@ -378,11 +378,27 @@ input[type=text]:focus{outline:none;border-color:var(--gold)}
 /* house counter on tiles */
 .hcount{display:block;font-family:'JetBrains Mono',monospace;font-size:7px;
   letter-spacing:.14em;color:var(--gold);line-height:1.1}
+
+/* ---------- unmistakable ownership ---------- */
+.tile.owned-by{border-color:var(--oc)!important;box-shadow:inset 0 0 0 1px var(--oc)}
+.tile.owned-mine{box-shadow:inset 0 0 0 2px var(--oc),0 0 20px -6px var(--oc)}
+.ownglow{opacity:.30!important}
+.otag{
+  position:absolute;top:6px;left:50%;
+  transform:translateX(-50%) scaleY(var(--unsquash));transform-origin:top center;
+  font-family:'JetBrains Mono',monospace;font-size:7px;letter-spacing:.1em;
+  color:#0B0810;background:var(--oc);padding:1px 4px;border-radius:1px;
+  pointer-events:none;white-space:nowrap;font-weight:700;
+}
+/* legend */
+#legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+#legend .lg{display:flex;align-items:center;gap:5px;font-size:10px;letter-spacing:.06em;color:var(--bone-dim)}
+#legend .lg i{width:9px;height:9px;display:block;background:var(--lc);border-radius:1px}
 </style>
 
 <div id="app">
   <header>
-    <div class="wordmark">MOGUL<span>Prototype · build 9</span></div>
+    <div class="wordmark">MOGUL<span>Prototype · build 11</span></div>
     <div class="phasebar" id="phasebar"></div>
     <div class="hdr-stat"><div class="k">Round</div><div class="v" id="hround">1 / 18</div></div>
     <div id="netbar"></div><button class="btn ghost" id="btnhelp">Rules</button>
@@ -521,6 +537,7 @@ const BANTER={
   jail:["Temporary setback.","I'll be out shortly.","Best seat in the house, actually."],
 };
 const BOTNAMES=["Vance","Odile","Kestrel"];
+let MYNAME="You";
 
 /* ============ NET (PeerJS / WebRTC) ============ */
 const NET={ mode:"local", code:null, seat:0, uid:null, peer:null, conns:[], hostConn:null,
@@ -587,7 +604,7 @@ function startHost(){
     netFail(String(err));
   });
   NET.peer.on("connection",onGuest);
-  newGame(["You",...BOTNAMES]);
+  newGame([MYNAME,...BOTNAMES]);
   G.players.forEach((p,i)=>{p.bot=i>0;p.human=i===0;p.claim=i===0?"host":null});
   NET.startedGame=false; buildBoard(); render(); fit();
 }
@@ -663,6 +680,7 @@ function netTeardown(){
 
 /* ============ STATE ============ */
 let G=null, busy=false, pendingCb=null, modalSig=null, modalKind="system";
+const AMT_CANCEL=-1e9;
 
 function newGame(names){
   G={
@@ -775,7 +793,16 @@ function renderTiles(){
     if(t.type==="prop"){
       const band=el("div","band"); band.style.setProperty("--dc",DISTRICTS[t.dist].c); d.appendChild(band);
       if(t.owner!==null){
-        const g=el("div","ownglow"); g.style.setProperty("--oc",G.players[t.owner].color); d.appendChild(g);
+        const o=G.players[t.owner];
+        const g=el("div","ownglow"); g.style.setProperty("--oc",o.color); d.appendChild(g);
+        d.style.setProperty("--oc",o.color);
+        d.classList.add("owned-by");
+        if(o.i===NET.seat)d.classList.add("owned-mine");
+        // owner tag, always legible
+        const tag=el("div","otag");
+        tag.style.setProperty("--oc",o.color);
+        tag.textContent=(o.name||"?").slice(0,4).toUpperCase();
+        d.appendChild(tag);
       }
       const l=el("div","lbl");
       l.innerHTML=esc(t.name)
@@ -903,8 +930,10 @@ function renderHeader(){
 }
 function renderHint(){
   const nxt=Object.keys(DRAFTS).map(Number).filter(r=>r>=G.round)[0];
-  $("#hint").innerHTML=`
-   <div style="margin-bottom:6px"><span class="chip">Cyan wireframe</span> unclaimed lot</div>
+  const legend=`<div id="legend">`+G.players.map(p=>
+    `<span class="lg" style="--lc:${p.color}"><i></i>${esc(p.name)}${p.i===NET.seat?" (you)":""}</span>`).join("")+`</div>`;
+  $("#hint").innerHTML=legend+`
+   <div style="margin:8px 0 6px"><span class="chip">Cyan wireframe</span> unclaimed lot</div>
    <div style="margin-bottom:6px"><span class="chip">Tower height</span> floors built</div>
    <div style="margin-bottom:6px"><span class="chip">Sky</span> how late it is</div>
    ${nxt?`<div style="color:var(--gold);margin-top:8px">Next draft: <b>${DRAFTS[nxt].toUpperCase()}</b> at end of round ${nxt}.</div>`
@@ -943,7 +972,7 @@ function modal(html,keep,kind){
 }
 function closeModal(){$("#veil").classList.remove("on");modalSig=null;modalKind="system";}
 function slam(who,amt,to){
-  $("#slamwho").textContent=who; $("#slamamt").textContent=amt===null?"CRASH":money(amt); $("#slamto").textContent=to;
+  $("#slamwho").textContent=who; $("#slamamt").textContent=(amt===null)?"CRASH":(amt===0?"SWAP":money(amt)); $("#slamto").textContent=to;
   const s=$("#slam"); s.classList.remove("on"); void s.offsetWidth; s.classList.add("on");
   setTimeout(()=>s.classList.remove("on"),1500);
 }
@@ -1014,7 +1043,7 @@ function renderPending(){
     const upd=()=>{
       const v=clamp(+inp.value);
       inp.value=v;
-      if(d.gauge){
+      if(d.gauge&&d.gauge>0){
         const r=v/d.gauge;
         const c=r<0.9?["pred","Below what they think it is worth"]
               :r<1.5?["lop","A serious offer"]
@@ -1027,7 +1056,7 @@ function renderPending(){
       inp.value=clamp((+inp.value)+(+b.dataset.v)); upd();
     });
     $("#amtok").onclick=()=>choose(clamp(+inp.value));
-    $("#mcancel").onclick=()=>choose(-1);
+    $("#mcancel").onclick=()=>choose(AMT_CANCEL);
     return;
   }
   if(q.kind==="list"){
@@ -1210,7 +1239,7 @@ function propLand(p,t){
         if(k===0){buy(p,t,cost);endStep()}else auction(t);
       });
   }
-  if(t.owner===p.i){log(`<b>${esc(p.name)}</b> is home.`);return endStep()}
+  if(t.owner===p.i){log(`<b>${esc(p.name)}</b> lands on their own <b>${esc(t.name)}</b>.`);return endStep()}
   const o=G.players[t.owner], r=calcRent(t,p);
   if(has(p,"WRECK")&&t.houses>0){
     if(p.bot)return wreck(p,t);
@@ -1306,8 +1335,16 @@ function endStep(){
 function turnHub(p){
   busy=false;
   const opts=[],acts=[];
-  const canBuild=G.round<13&&p.props.some(i=>monopoly(p,G.tiles[i].dist)&&G.tiles[i].houses<4);
-  opts.push({t:"Build",cls:canBuild?"":"ghost",dis:!canBuild}); acts.push("build");
+  const ownsSet=p.props.some(i=>monopoly(p,G.tiles[i].dist));
+  const roomToBuild=p.props.some(i=>monopoly(p,G.tiles[i].dist)&&G.tiles[i].houses<4);
+  const canBuild=G.round<13&&roomToBuild;
+  let whyNo="";
+  if(!canBuild){
+    if(G.round>=13)whyNo="Construction closes in Last Call.";
+    else if(!ownsSet)whyNo="You need every lot of one colour first.";
+    else whyNo="Every district you hold is already at 4 floors.";
+  }
+  opts.push({t:canBuild?"Build":"Build \u2014 "+whyNo,cls:canBuild?"":"ghost",dis:!canBuild}); acts.push("build");
   const canTrade=G.tiles.some(t=>t.type==="prop"&&t.owner!==null&&t.owner!==p.i);
   opts.push({t:"Trade",cls:"ghost",dis:!canTrade}); acts.push("trade");
   if(has(p,"DOMAIN")&&!p.domainUsed&&canTrade){opts.push({t:"Eminent domain",cls:"ghost"});acts.push("domain")}
@@ -1379,71 +1416,136 @@ function openTradeList(p){
       openPrice(p,G.tiles[rows[k].i]);
     });
 }
-function openPrice(p,t){
+/* ---------- Deal builder: their lot + your lots + cash either way ---------- */
+function openPrice(p,t){ openDeal(p,t,{give:[],cash:0}); }
+
+function dealValue(deal,t,p,o){
+  // rough worth of the package from the seller's point of view
+  const theirs=botValue(o,t);
+  const mine=deal.give.reduce((s,i)=>s+botValue(o,G.tiles[i]),0);
+  return {want:theirs, offered:mine+Math.max(0,deal.cash)};
+}
+function openDeal(p,t,deal){
   const o=G.players[t.owner];
-  const val=botValue(o,t);
+  const v=dealValue(deal,t,p,o);
   const set=G.tiles.filter(x=>x.type==="prop"&&x.dist===t.dist);
   const completes=set.filter(x=>x.owner===p.i).length===set.length-1;
-  const suggested=Math.min(p.cash,Math.round(val*1.7/10)*10);
-  ask(p.i,"amount",`Offer on ${t.name}`,null,{
+  const ratio=v.offered/Math.max(1,v.want*(completes?1.9:1.5));
+  const verdict=ratio<0.75?["pred","They will almost certainly refuse"]
+              :ratio<1.0?["lop","Close, but probably not enough"]
+              :ratio<1.5?["fair","A solid offer"]
+                        :["fair","Generous \u2014 hard to refuse"];
+  const giveNames=deal.give.map(i=>esc(G.tiles[i].name)).join(", ")||"nothing";
+  const cashLine=deal.cash>0?`you pay ${money(deal.cash)}`
+                :deal.cash<0?`<b>they</b> pay you ${money(-deal.cash)}`
+                :"no cash";
+  const rows=[
+    {n:"Add or remove your lots", s:`Offering: ${giveNames}`, v:deal.give.length+" \u25aa"},
+    {n:"Set the cash", s:cashLine, v:deal.cash===0?"\u2014":money(Math.abs(deal.cash))},
+    {n:"Send this offer", s:`For ${esc(t.name)} from ${esc(o.name)}`, v:"\u2192",
+     dis:deal.cash>p.cash},
+  ];
+  ask(p.i,"list",`Deal for ${t.name}`,null,{
     eyebrow:`Negotiating with ${o.name}`,
-    intro:`${DISTRICTS[t.dist].n} \u00b7 printed price ${money(t.price)} \u00b7 you pay ${money(calcRent(t,p))} when you land here.`
-      +(completes?" <b>This lot completes your district \u2014 they know it, and will hold out.</b>":"")
-      +` Type any amount up to your ${money(p.cash)}.`,
-    def:suggested, min:0, max:p.cash, gauge:val,
-    cancel:"Back", confirm:"Send offer"
+    intro:`${DISTRICTS[t.dist].n} \u00b7 printed ${money(t.price)} \u00b7 you pay ${money(calcRent(t,p))} landing here.`
+      +(completes?" <b>This completes your district \u2014 they know it.</b>":"")
+      +` You hold ${money(p.cash)}.<br><span class="appr ${verdict[0]}">Appraiser: ${verdict[1]}</span>`,
+    rows,cancel:"Back"},k=>{
+      if(k<0)return openTradeList(p);
+      if(k===0)return openGive(p,t,deal);
+      if(k===1)return openCash(p,t,deal);
+      resolveOffer(p,o,t,deal);
+    });
+}
+function openGive(p,t,deal){
+  const mine=p.props.filter(i=>i!==t.i);
+  if(!mine.length){
+    return ask(p.i,"bar","You have no lots of your own to put on the table yet.",
+      [{t:"Back",cls:"big"}],null,()=>openDeal(p,t,deal));
+  }
+  const rows=mine.map(i=>{
+    const x=G.tiles[i], on=deal.give.includes(i);
+    return {i, sw:DISTRICTS[x.dist].c,
+      n:(on?"\u2713 ":"")+x.name,
+      s:`${DISTRICTS[x.dist].n} \u00b7 ${x.houses} floors \u00b7 ${on?"on the table":"tap to add"}`,
+      v:money(x.price)};
+  });
+  ask(p.i,"list","Your side of the table",null,{
+    eyebrow:"Tap a lot to add or remove it",
+    intro:"Anything you offer transfers with its floors cleared, same as a purchase.",
+    rows,cancel:"Done"},k=>{
+      if(k<0)return openDeal(p,t,deal);
+      const i=rows[k].i;
+      deal.give=deal.give.includes(i)?deal.give.filter(x=>x!==i):deal.give.concat([i]);
+      openGive(p,t,deal);
+    });
+}
+function openCash(p,t,deal){
+  ask(p.i,"amount","Cash in the deal",null,{
+    eyebrow:"Positive = you pay \u00b7 negative = they pay you",
+    intro:`You hold ${money(p.cash)}. Enter a negative number to demand cash from ${esc(G.players[t.owner].name)} instead.`,
+    def:deal.cash, min:-9999, max:p.cash, gauge:null,
+    cancel:"Back", confirm:"Set"
   },k=>{
-    if(k<0)return openTradeList(p);
-    resolveOffer(p,o,t,Math.max(0,Math.min(p.cash,k)));
+    if(k===AMT_CANCEL||k===null||k===undefined)return openDeal(p,t,deal);
+    deal.cash=Math.max(-9999,Math.min(p.cash,k));
+    openDeal(p,t,deal);
   });
 }
-function resolveOffer(buyer,seller,t,price,botCont){
+function dealSummary(deal,t,buyer,seller){
+  const lots=deal.give.map(i=>esc(G.tiles[i].name)).join(" + ");
+  const bits=[];
+  if(lots)bits.push(lots);
+  if(deal.cash>0)bits.push(money(deal.cash));
+  if(deal.cash<0)bits.push(`(and ${esc(seller.name)} adds ${money(-deal.cash)})`);
+  return bits.length?bits.join(" + "):"nothing at all";
+}
+function resolveOffer(buyer,seller,t,deal,botCont){
+  if(typeof deal==="number")deal={give:[],cash:deal};   // legacy bot calls
   const back=()=>{ if(buyer.bot){ if(botCont)botCont(); } else turnHub(buyer); };
   const set=G.tiles.filter(x=>x.type==="prop"&&x.dist===t.dist);
   const completes=set.filter(x=>x.owner===buyer.i).length===set.length-1;
-  const need=botValue(seller,t)*(completes?1.9:1.5);
+  const v=dealValue(deal,t,buyer,seller);
+  const need=v.want*(completes?1.9:1.5);
   let done=false;
+  const valid=()=>t.owner===seller.i
+    && buyer.cash>=Math.max(0,deal.cash)
+    && seller.cash>=Math.max(0,-deal.cash)
+    && deal.give.every(i=>G.tiles[i].owner===buyer.i);
   const finish=ok=>{
-    if(done)return; done=true;                // guard against double-resolution
-    if(ok&&buyer.cash>=price&&t.owner===seller.i){
-      doTrade(buyer,seller,t,price);
-    }else if(ok){
-      log(`The deal for <b>${esc(t.name)}</b> fell through.`);
-    }else{
-      log(`<b>${esc(seller.name)}</b> waves off ${money(price)} for ${esc(t.name)}.`);
-    }
-    render();
-    back();
+    if(done)return; done=true;
+    if(ok&&valid())doTrade(buyer,seller,t,deal);
+    else if(ok)log(`The deal for <b>${esc(t.name)}</b> fell through.`);
+    else log(`<b>${esc(seller.name)}</b> turns down the offer for ${esc(t.name)}.`);
+    render(); back();
   };
+  const summary=dealSummary(deal,t,buyer,seller);
   if(seller.bot){
-    if(!buyer.bot)ask(buyer.i,"bar",`<span class="waiting">${esc(seller.name)} is considering your ${money(price)} offer\u2026</span>`,[],null,()=>{});
+    if(!buyer.bot)ask(buyer.i,"bar",`<span class="waiting">${esc(seller.name)} is considering \u2026</span>`,[],null,()=>{});
     return setTimeout(()=>{
       G.pending=null; pendingCb=null;
-      finish(price>=need&&seller.props.length>1);
+      finish(v.offered>=need&&seller.props.length>1);
     },800);
   }
-  // human seller (possibly across the network): buyer waits with a Withdraw option
   if(!buyer.bot){
-    ask(buyer.i,"bar",`<span class="waiting">Offer of ${money(price)} for ${esc(t.name)} sent to ${esc(seller.name)}\u2026</span>`,
+    ask(buyer.i,"bar",`<span class="waiting">Offer sent to ${esc(seller.name)}: ${summary} for ${esc(t.name)}\u2026</span>`,
       [{t:"Withdraw offer",cls:"ghost"}],{waitOffer:true},()=>{
         sellerPending=null; sellerCb=null;
-        if(done)return;
-        done=true;
+        if(done)return; done=true;
         log(`<b>${esc(buyer.name)}</b> withdraws the offer.`);
         render(); back();
       });
   }
-  askSeller(seller,buyer,t,price,completes,finish);
+  askSeller(seller,buyer,t,deal,completes,finish,summary);
 }
-/* A parallel prompt aimed at the seller. On the host it's a second pending slot;
-   the host publishes it and the seller (guest) answers it. */
+/* A parallel prompt aimed at the seller. */
 let sellerPending=null, sellerCb=null;
-function askSeller(seller,buyer,t,price,completes,finish){
+function askSeller(seller,buyer,t,deal,completes,finish,summary){
   sellerPending={seat:seller.i,kind:"bar",
-    text:`<b>${esc(buyer.name)}</b> offers <b>${money(price)}</b> for ${esc(t.name)}${completes?" — it completes their district":""}.`,
-    opts:[{t:"Take "+money(price),cls:"big"},{t:"Refuse",cls:"ghost"}]};
+    text:`<b>${esc(buyer.name)}</b> offers <b>${summary}</b> for your <b>${esc(t.name)}</b>`
+      +(completes?" \u2014 it completes their district.":"."),
+    opts:[{t:"Accept",cls:"big"},{t:"Refuse",cls:"ghost"}]};
   sellerCb=k=>{ sellerPending=null; sellerCb=null;
-    // clear the buyer's waiting prompt if it's still up
     if(G.pending&&G.pending.data&&G.pending.data.waitOffer){G.pending=null;pendingCb=null;}
     finish(k===0);
   };
@@ -1459,7 +1561,6 @@ function renderSellerPrompt(){
 }
 function chooseSeller(k){
   if(NET.mode==="guest"){
-    // send to host, then immediately clear my own prompt so I never freeze on this screen
     if(NET.hostConn&&NET.hostConn.open)NET.hostConn.send({t:"sellerChoice",seat:NET.seat,choice:k});
     sellerPending=null; sellerCb=null;
     setBar('<span class="waiting">Sent\u2026 waiting for the table.</span>',[]);
@@ -1467,14 +1568,24 @@ function chooseSeller(k){
   }
   const cb=sellerCb; sellerPending=null; sellerCb=null;
   if(cb)cb(k);
-  if(NET.mode==="host")publish();   // push the resolved state to everyone
+  if(NET.mode==="host")publish();
 }
-function doTrade(buyer,seller,t,price){
-  buyer.cash-=price; seller.cash+=price;
+function doTrade(buyer,seller,t,deal){
+  if(typeof deal==="number")deal={give:[],cash:deal};
+  // cash both ways
+  buyer.cash-=deal.cash; seller.cash+=deal.cash;
+  // their lot comes to the buyer
   seller.props=seller.props.filter(x=>x!==t.i); buyer.props.push(t.i);
   t.owner=buyer.i; t.houses=0; t.free=false;
-  log(`<b>${esc(buyer.name)}</b> buys <b>${esc(t.name)}</b> from ${esc(seller.name)} for ${money(price)}.`,"big");
-  slam("Deal struck",price,"→ "+seller.name);
+  // the buyer's lots go the other way
+  deal.give.forEach(i=>{
+    const x=G.tiles[i];
+    buyer.props=buyer.props.filter(y=>y!==i); seller.props.push(i);
+    x.owner=seller.i; x.houses=0; x.free=false;
+  });
+  const summary=dealSummary(deal,t,buyer,seller);
+  log(`<b>${esc(buyer.name)}</b> trades ${summary} to <b>${esc(seller.name)}</b> for <b>${esc(t.name)}</b>.`,"big");
+  slam("Deal struck",Math.abs(deal.cash),t.name);
   pop(buyer); pop(seller); render();
 }
 function nextTurn(){
@@ -1641,7 +1752,7 @@ function showResults(){
 /* ============ ONLINE ============ */
 /* ============ MENUS ============ */
 function menu(){
-  modal(`<div class="eyebrow">Playable prototype · build 9</div><h2>MOGUL</h2>
+  modal(`<div class="eyebrow">Playable prototype · build 11</div><h2>MOGUL</h2>
     <p>A 24-lot board, 18 rounds, hard-capped. Three augment drafts — <b>Silver</b> after round 2, <b>Gold</b> after round 5, <b>Prismatic</b> after round 9. Rent scales ×1 → ×1.5 → ×2 → ×3 as the sky turns.</p>
     <div class="rows">
       <button class="row" id="mlocal"><span class="rn">Play solo<small>You against three drafting bots</small></span><span class="rv">→</span></button>
@@ -1669,16 +1780,36 @@ function rules(){
   <div class="rowbtn"><button class="btn big" id="ok">Back</button></div>`,true);
   $("#ok").onclick=()=>{closeModal();G&&!G.over?renderPending():menu()};
 }
-function startLocal(){
+function askName(next){
+  modal(`<div class="eyebrow">Before we start</div><h2>What should the table call you?</h2>
+    <input type="text" id="nm" maxlength="12" value="${esc(MYNAME==="You"?"":MYNAME)}" placeholder="your name"
+      style="font-size:20px;letter-spacing:.08em;text-transform:none">
+    <p>This is the name everyone else sees on the board and on your lots.</p>
+    <div class="rowbtn">
+      <button class="btn ghost" id="nback">Back</button>
+      <button class="btn big" id="nok">Continue</button>
+    </div>`,true,"system");
+  const inp=$("#nm"); if(inp&&inp.focus)inp.focus();
+  if(inp)inp.onkeydown=e=>{if(e.key==="Enter")$("#nok").onclick()};
+  $("#nback").onclick=()=>menu();
+  $("#nok").onclick=()=>{
+    const v=((inp&&inp.value)||"").trim();
+    MYNAME=v?v.slice(0,12):"You";
+    next();
+  };
+}
+function startLocal(){ askName(startLocalGo); }
+function startLocalGo(){
   netTeardown(); closeModal();
-  newGame(["You",...BOTNAMES]);
+  newGame([MYNAME,...BOTNAMES]);
   G.players.forEach((p,i)=>{p.bot=i>0;p.human=i===0});
   G.startedGame=true;
   NET.seat=0;
   buildBoard(); render(); log("The table is set. Four players, eighteen rounds.");
   fit(); startTurn();
 }
-function hostSetup(){
+function hostSetup(){ askName(hostSetupGo); }
+function hostSetupGo(){
   netTeardown(); closeModal();
   startHost();   // opens PeerJS, then renderLobbyHost() fires on "open"
   modal(`<div class="eyebrow">Opening a table…</div><h2>Connecting</h2>
@@ -1799,6 +1930,6 @@ setInterval(()=>{
   if(!mineSeller&&!minePending){ closeModal(); renderPending(); }
 },2000);
 window.addEventListener("resize",()=>{ if(G){buildBoard();render()} fit() });
-newGame(["You",...BOTNAMES]); buildBoard(); render(); fit();
+newGame([MYNAME,...BOTNAMES]); buildBoard(); render(); fit();
 menu();
 </script>
